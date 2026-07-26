@@ -1,0 +1,68 @@
+{
+  "listen_addr": "0.0.0.0:8123",
+  "key": "server-key-1234567890",
+  "header_type": "printable",
+  "outbounds": {
+    "tor": "socks5://127.0.0.1:9050",
+    "i2p": "http://127.0.0.1:4444"
+  },
+  "acl": {
+    "default": "direct",
+    "rules": [
+      {
+        "match": [".onion"],
+        "action": "proxy",
+        "proxy": "tor"
+      },
+      {
+        "match": [".i2p"],
+        "action": "proxy",
+        "proxy": "i2p"
+      },
+      {
+        "match": ["127.0.0.1/8", "::1/128", "fe80::/10"],
+        "action": "reject"
+      }
+    ]
+  },
+  "forward_addr": "",
+  "dns_hijack": true,
+  "dns_cache_ttl": 1200,
+  "dns_cache_size": 4096,
+  "dns_upstream_addrs": ["system", "1.1.1.1:53", "8.8.8.8:53"],
+  "fake_dns_ttl": 1200,
+  "fake_dns_size": 1024,
+  "fake_dns_ipv6_prefix96": "fdff:ffff:ffff:ffff::/96",
+  "debug": false,
+  "activity_log": false,
+  "flow_control_debug": false,
+  "flow_control_buffer_limit": 1,
+  "allow_reverse_routes": true,
+  "reverse_upstreams": [],
+  "users": [
+    {
+      "name": "default",
+      "password": "user-pass-1234567890",
+      "enable": true,
+      "acl": {
+        "default": "default",
+        "rules": [
+          {
+            "match": [".example.com:443"],
+            "action": "direct"
+          }
+        ]
+      },
+      "u": 0,
+      "d": 0
+    },
+    {
+      "name": "reverse_user",
+      "password": "reverse-user-pass",
+      "enable": true,
+      "allow_reverse_routes": true,
+      "u": 0,
+      "d": 0
+    }
+  ]
+}

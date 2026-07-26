@@ -1,0 +1,23 @@
+{
+  "local_addr": "127.0.0.1:1080",
+  "proxy": "",
+  "server_response_timeout": 20,
+  "udp_associate_idle_timeout": 60,
+  "max_active_channels": 32,
+  "max_channel_allocations": 128,
+  "max_mux_age": 600,
+  "debug": false,
+  "activity_log": false,
+  "flow_control_debug": false,
+  "servers":[
+    {
+      "remarks": "test",
+      "server_addr": "127.0.0.1:8123",
+      "proxy": "",
+      "key": "server-key-1234567890",
+      "header_type": "printable",
+      "name": "default",
+      "password": "user-pass-1234567890"
+    }
+  ]
+}
