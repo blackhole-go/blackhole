@@ -1,0 +1,169 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+          - target: linux-armv7
+            goos: linux
+            goarch: arm
+            goarm: "7"
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+          - target: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: zip
+          - target: android-arm64
+            goos: android
+            goarch: arm64
+            ext: ""
+            packages: "./cmd/client ./cmd/server ./cmd/httpclient"
+            archive: tar.gz
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(sed -n 's/^[[:space:]]*var Version = "\([^"]*\)".*/\1/p' pkg/version/version.go)"
+          if [ -z "${version}" ]; then
+            echo "failed to read version from pkg/version/version.go" >&2
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Build binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact="blackhole-v${VERSION}-${{ matrix.target }}"
+          out_dir="dist/${artifact}"
+          ldflags="-s -w"
+          mkdir -p "${out_dir}"
+
+          for pkg in ${{ matrix.packages }}; do
+            name="$(basename "${pkg}")"
+            echo "Building ${name} for ${GOOS}/${GOARCH}"
+            go build -trimpath -ldflags="${ldflags}" -o "${out_dir}/${name}${{ matrix.ext }}" "${pkg}"
+          done
+
+          cp README.md client.json server.json httpclient.json "${out_dir}/"
+          if [ "${GOOS}" = "android" ]; then
+            sed -i 's/"client_binary": "client"/"client_binary": ""/' "${out_dir}/httpclient.json"
+          fi
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          artifact="blackhole-v${VERSION}-${{ matrix.target }}"
+          mkdir -p dist/packages
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd dist && zip -r "packages/${artifact}.zip" "${artifact}")
+          else
+            tar -czf "dist/packages/${artifact}.tar.gz" -C dist "${artifact}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackhole-v${{ env.VERSION }}-${{ matrix.target }}
+          path: dist/packages/*
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --title "${tag}" --notes "" || true
+          fi
+          gh release view "${tag}" >/dev/null
+          gh release upload "${tag}" dist/packages/* --clobber
