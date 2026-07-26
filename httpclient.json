@@ -1,0 +1,5 @@
+{
+  "local_addr": "127.0.0.1:8080",
+  "client_config_path": "client.json",
+  "client_binary": "client"
+}
