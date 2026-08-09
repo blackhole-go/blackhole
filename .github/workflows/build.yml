@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          version="$(sed -n 's/^[[:space:]]*var Version = "\([^"]*\)".*/\1/p' pkg/version/version.go)"
+          version="$(sed -n 's/^[[:space:]]*const Version = "\([^"]*\)".*/\1/p' pkg/version/version.go)"
           if [ -z "${version}" ]; then
             echo "failed to read version from pkg/version/version.go" >&2
             exit 1
