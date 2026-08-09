@@ -46,11 +46,6 @@ func (c *Client) getChannel() (*clientMuxConn, *mux.Channel, error) {
 
 	var lastErr error
 	for _, server := range c.sortedServerCandidates() {
-		if c.hasUnhealthyAllocatableTCPMux(server.identity) {
-			lastErr = errors.New("existing unhealthy TCP mux is still pending")
-			continue
-		}
-
 		cm, ch, err := c.getOrCreateTCPMuxChannel(server)
 		if err != nil {
 			lastErr = err
@@ -155,26 +150,6 @@ func (c *Client) completeTCPMuxCreation(server *clientServerState, creation *tcp
 		c.tcpCreations[server.identity] = creations
 	}
 	c.tcpCreateMu.Unlock()
-}
-
-func (c *Client) hasUnhealthyAllocatableTCPMux(identity serverIdentity) bool {
-	if c.singleServerMode() {
-		return false
-	}
-
-	c.muxConnMu.Lock()
-	defer c.muxConnMu.Unlock()
-
-	c.pruneClosedMuxConnsLocked()
-	if c.existingMuxHealthy(identity) {
-		return false
-	}
-	for _, cm := range c.muxConns {
-		if cm.serverIdentity == identity && cm.mc.CanAllocChannel() {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Client) tryExistingTCPChannel() (*clientMuxConn, *mux.Channel, bool) {

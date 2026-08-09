@@ -46,6 +46,7 @@ func TestReverseRouteChainABC(t *testing.T) {
 	clientAddr := freeTCPAddr(t)
 
 	commonUser := config.UserConfig{Name: "chain-user", Password: "chain-password-A1b2c3", Enable: true, AllowReverseRoutes: true}
+	priority100 := uint32(100)
 	serverAConfig := writeJSONConfig(t, tmpDir, "server-a.json", config.ServerConfig{
 		ListenAddr: serverAAddr,
 		Key:        "chain-header-key-A1b2c3",
@@ -95,7 +96,8 @@ func TestReverseRouteChainABC(t *testing.T) {
 					Remarks:    "server B",
 				},
 				Route: config.ReverseRouteConfig{
-					Accept: []string{ipv4Route},
+					Accept:   []string{ipv4Route},
+					Priority: &priority100,
 				},
 			},
 		},

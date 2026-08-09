@@ -51,6 +51,19 @@ func TestServerFlowControlBufferLimit(t *testing.T) {
 	}
 }
 
+func TestReverseRoutePriorityDefaultsAndAllowsZero(t *testing.T) {
+	var route ReverseRouteConfig
+	if got := route.PriorityValue(); got != DefaultReverseRoutePriority {
+		t.Fatalf("default PriorityValue()=%d, want %d", got, DefaultReverseRoutePriority)
+	}
+
+	zero := uint32(0)
+	route.Priority = &zero
+	if got := route.PriorityValue(); got != 0 {
+		t.Fatalf("explicit zero PriorityValue()=%d, want 0", got)
+	}
+}
+
 func TestServerDNSHijackCanBeDisabled(t *testing.T) {
 	disabled := false
 	cfg := ServerConfig{DNSHijack: &disabled}

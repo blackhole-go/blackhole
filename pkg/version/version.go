@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Version is overridden by release builds through -ldflags.
-var Version = "2.5.2"
+// Version is source-defined so build flags cannot change protocol derivation.
+const Version = "2.5.3"
 
 func String() string {
 	return fmt.Sprintf("Blackhole %s", Version)

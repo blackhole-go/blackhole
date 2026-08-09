@@ -74,6 +74,11 @@ type clientServerState struct {
 	incID    uint32
 }
 
+type coolingServerCandidate struct {
+	server    *clientServerState
+	nextRetry time.Time
+}
+
 type serverHealth struct {
 	healthPenalty int
 	class         serverHealthClass
@@ -160,23 +165,23 @@ func (c *Client) sortedServerCandidates() []*clientServerState {
 
 	now := time.Now()
 	candidates := make([]*clientServerState, 0, len(c.servers))
-	var earliestDialFailed *clientServerState
-	var earliestDialRetry time.Time
+	cooling := make([]coolingServerCandidate, 0, len(c.servers))
 	for _, server := range c.servers {
 		health := c.statsForLocked(server.identity)
 		decayServerHealthLocked(health, now)
 		if !serverCanRetry(health, now) {
-			if normalizedHealthClass(health) == serverHealthDialFailed &&
-				(earliestDialFailed == nil || health.nextRetry.Before(earliestDialRetry)) {
-				earliestDialFailed = server
-				earliestDialRetry = health.nextRetry
-			}
+			cooling = append(cooling, coolingServerCandidate{
+				server:    server,
+				nextRetry: health.nextRetry,
+			})
 			continue
 		}
 		candidates = append(candidates, server)
 	}
-	if len(candidates) == 0 && earliestDialFailed != nil {
-		candidates = append(candidates, earliestDialFailed)
+	if len(candidates) == 0 {
+		if selected := selectCoolingServer(cooling, now, rand.Float64()); selected != nil {
+			candidates = append(candidates, selected)
+		}
 	}
 
 	rand.Shuffle(len(candidates), func(i, j int) {
@@ -198,6 +203,37 @@ func (c *Client) sortedServerCandidates() []*clientServerState {
 		return healthSortScore(leftHealth) > healthSortScore(rightHealth)
 	})
 	return candidates
+}
+
+func selectCoolingServer(candidates []coolingServerCandidate, now time.Time, sample float64) *clientServerState {
+	if len(candidates) == 0 {
+		return nil
+	}
+	weights := make([]float64, len(candidates))
+	var total float64
+	for i, candidate := range candidates {
+		remainingSeconds := candidate.nextRetry.Sub(now).Seconds()
+		if remainingSeconds <= 0 {
+			return candidate.server
+		}
+		weight := 1 / math.Log1p(remainingSeconds)
+		weights[i] = weight
+		total += weight
+	}
+	if sample < 0 {
+		sample = 0
+	}
+	if sample >= 1 {
+		sample = math.Nextafter(1, 0)
+	}
+	target := sample * total
+	for i, weight := range weights {
+		if target < weight {
+			return candidates[i].server
+		}
+		target -= weight
+	}
+	return candidates[len(candidates)-1].server
 }
 
 func serverCanRetry(health *serverHealth, now time.Time) bool {

@@ -226,6 +226,42 @@ func TestReverseRouteManagerNewestRouteAndRejectSkip(t *testing.T) {
 	}
 }
 
+func TestReverseRouteManagerOrdersPriorityBeforeRecency(t *testing.T) {
+	manager := newReverseRouteManager()
+	oldDefaultMux := &mux.MuxConn{}
+	highPriorityMux := &mux.MuxConn{}
+	newDefaultMux := &mux.MuxConn{}
+	priority100 := uint32(100)
+
+	oldDefault, err := compileReverseRouteConfig(config.ReverseRouteConfig{Accept: []string{".example.com"}})
+	if err != nil {
+		t.Fatalf("compile old default route: %v", err)
+	}
+	highPriority, err := compileReverseRouteConfig(config.ReverseRouteConfig{
+		Accept:   []string{".example.com"},
+		Priority: &priority100,
+	})
+	if err != nil {
+		t.Fatalf("compile high-priority route: %v", err)
+	}
+	newDefault, err := compileReverseRouteConfig(config.ReverseRouteConfig{Accept: []string{".example.com"}})
+	if err != nil {
+		t.Fatalf("compile new default route: %v", err)
+	}
+
+	manager.register(oldDefaultMux, oldDefault)
+	manager.register(highPriorityMux, highPriority)
+	manager.register(newDefaultMux, newDefault)
+
+	entries := manager.matchEntries(&socks5.Request{DstAddr: "www.example.com", DstPort: 443})
+	if len(entries) != 3 {
+		t.Fatalf("matching route count=%d, want 3", len(entries))
+	}
+	if entries[0].mc != highPriorityMux || entries[1].mc != newDefaultMux || entries[2].mc != oldDefaultMux {
+		t.Fatal("routes were not ordered by ascending priority and then newest registration")
+	}
+}
+
 func TestReverseRouteIPv6Prefix96(t *testing.T) {
 	route, err := compileReverseRouteConfig(config.ReverseRouteConfig{
 		IPv6Prefix96: "fd12:3456:789a:1::/96",

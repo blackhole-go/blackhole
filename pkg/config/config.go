@@ -22,6 +22,7 @@ const (
 	DefaultFakeDNSSize               = 1024
 	DefaultFakeDNSIPv6Prefix96       = "fdff:ffff:ffff:ffff::/96"
 	DefaultFlowControlBufferLimitGiB = 1.0
+	DefaultReverseRoutePriority      = uint32(256)
 )
 
 var defaultDNSUpstreamAddrs = []string{"system", "1.1.1.1:53", "8.8.8.8:53"}
@@ -55,6 +56,14 @@ type ReverseRouteConfig struct {
 	Accept       []string `json:"accept,omitempty"`
 	Reject       []string `json:"reject,omitempty"`
 	IPv6Prefix96 string   `json:"ipv6_prefix96,omitempty"`
+	Priority     *uint32  `json:"priority,omitempty"`
+}
+
+func (c ReverseRouteConfig) PriorityValue() uint32 {
+	if c.Priority == nil {
+		return DefaultReverseRoutePriority
+	}
+	return *c.Priority
 }
 
 type ReverseUpstreamConfig struct {

@@ -89,6 +89,7 @@ func (s *Server) handleReverseRoutePacket(mc *mux.MuxConn, packet *mux.Packet) {
 		Accept:       update.Accept,
 		Reject:       update.Reject,
 		IPv6Prefix96: update.IPv6Prefix96,
+		Priority:     update.Priority,
 	})
 	if err != nil {
 		log.Printf("Reverse route compile error: remote=%s error=%v", mc.RemoteName(), err)
@@ -104,7 +105,7 @@ func (s *Server) handleReverseRoutePacket(mc *mux.MuxConn, packet *mux.Packet) {
 		s.denyReverseRouteRegistration(mc, userName)
 		return
 	}
-	log.Printf("Registered reverse route: remote=%s accept=%d reject=%d", mc.RemoteName(), len(update.Accept), len(update.Reject))
+	log.Printf("Registered reverse route: remote=%s priority=%d accept=%d reject=%d", mc.RemoteName(), route.priority, len(update.Accept), len(update.Reject))
 }
 
 func (s *Server) denyReverseRouteRegistration(mc *mux.MuxConn, userName string) {
@@ -121,6 +122,7 @@ func sendReverseRouteUpdate(mc *mux.MuxConn, route config.ReverseRouteConfig, pa
 		Accept:       route.Accept,
 		Reject:       route.Reject,
 		IPv6Prefix96: route.IPv6Prefix96,
+		Priority:     route.Priority,
 	})
 	if err != nil {
 		return err

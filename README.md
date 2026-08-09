@@ -108,7 +108,7 @@ Full client config:
 - **`header_type`**: Obfuscation-header byte set. Supported values are `printable`, `any`, `ALPHABET`, `Alphabet`, `alphabet`, and `alnum`. The `alnum` type limits generated magic bytes to `A-Z`, `a-z`, and `0-9`.
 - **`server_response_timeout`**: Overall seconds from sending a TCP connect or UDP associate channel request until receiving the final target setup result. The intermediate channel-registration acknowledgement does not extend the deadline. The default is `20` for an omitted or non-positive value.
 - **`udp_associate_idle_timeout`**: Idle seconds before the local client closes a UDP association. Any accepted upstream or downstream UDP packet refreshes the timer. The default is `60` for an omitted or non-positive value.
-- **`max_active_channels`**: Maximum channels that one client mux may keep active at the same time. The default is `32` for an omitted or non-positive value.
+- **`max_active_channels`**: Maximum channels that one client mux may keep active at the same time. The default is `32` for an omitted or non-positive value; configured positive values are capped at `224`.
 - **`max_channel_allocations`**: Total channels one client mux may allocate before a new mux is opened. The default is `128`; configured values are clamped to `[1,224]`.
 - **`max_mux_age`**: Seconds during which a client-created mux may accept new channels. Existing channels continue running after the age expires. The default is `600`, configured values are clamped to `[60,3600]`, and the setting does not apply to server-to-server reverse-upstream muxes.
 - **`debug`**: Enables bounded diagnostics such as the configured server list, previous-mux allocation summaries, and malformed channel-response prefixes. Payload and response prefixes remain limited to 64 bytes. Default: `false`.
@@ -117,7 +117,9 @@ Full client config:
 
 #### Multi-server selection
 
-When a new mux is needed, the client ranks servers by health first, then combines passive throughput with server RTT. RTT is measured from sending a TCP connect or UDP associate channel request until the selected server acknowledges that it registered and parsed the channel, before reverse-route forwarding or target setup. The client averages the 5 most recent samples; a server without samples is treated as `100 ms`, and a server without measured throughput starts at `1 MiB/s`. Existing healthy muxes are reused according to their passive throughput.
+When a new mux is needed, the client ranks servers by health first, then combines passive throughput with server RTT. RTT is measured from sending a TCP connect or UDP associate channel request until the selected server acknowledges that it registered and parsed the channel, before reverse-route forwarding or target setup. The client averages the 5 most recent samples; a server without samples is treated as `100 ms`, and a server without measured throughput starts at `1 MiB/s`. Existing healthy muxes are reused according to their passive throughput. An unhealthy existing mux is not reused, but it does not prevent the client from opening another mux.
+
+Dial, invalid-response, and no-response failures place a server into progressively longer retry cooldowns. Servers still in cooldown are skipped while at least one server is ready. If every configured server is cooling down, the client still tries one: each server receives weight `1 / ln(remaining_cooldown_seconds + 1)`, so a server closer to recovery is more likely to be selected without forcing every request onto a single endpoint.
 
 ### Server Config
 
@@ -236,8 +238,9 @@ FakeDNS handles only `.onion` and `.i2p` before any real DNS lookup, even when `
 - **`reverse_upstreams[].route.accept`**: Route patterns accepted through this upstream registration.
 - **`reverse_upstreams[].route.reject`**: Route patterns rejected before `accept` is checked.
 - **`reverse_upstreams[].route.ipv6_prefix96`**: Optional IPv6 `/96` prefix advertised for reverse FakeDNS routing.
+- **`reverse_upstreams[].route.priority`**: Route priority. Smaller values are preferred. Default: `256` when omitted, including registrations from older versions.
 
-Reverse-route patterns use the same address, domain, and port syntax as ACL matches. Newer registered routes take priority over older routes. Removing a user's permission during runtime configuration refresh removes that user's existing routes.
+Reverse-route patterns use the same address, domain, and port syntax as ACL matches. Matching routes are tried by ascending priority; routes with the same priority retain the existing newest-registration-first behavior. Removing a user's permission during runtime configuration refresh removes that user's existing routes.
 
 A reverse-upstream mux has no allocation-age limit and permits all 224 data-channel IDs as both total and active channels. After more than half the IDs have been allocated, the server opens and registers a replacement mux while the older one remains available until close or ID exhaustion. Before the first channel request, refresh-idle keepalives preserve the reverse mux; after channel traffic starts, keepalive returns to normal mode. A non-empty channel request counts as real data activity.
 
@@ -252,6 +255,7 @@ Reverse-upstream example:
   "name": "default",
   "password": "user-pass",
   "route": {
+    "priority": 100,
     "accept": ["192.168.0.0/16", ".example.com:443"],
     "reject": ["192.168.1.0/24:80~1024"],
     "ipv6_prefix96": "fd12:3456:789a:1::/96"
@@ -265,6 +269,8 @@ Reverse-upstream example:
 - **`activity_log`**: Enables routine server-side channel-close logs. Default: `false`.
 - **`flow_control_debug`**: Enables verbose logs when a server-side channel receive window grows or shrinks. Default: `false`.
 - **`flow_control_buffer_limit`**: Server-wide adaptive receive-window growth budget in GiB, shared by inbound and reverse-upstream muxes. Decimals are accepted, such as `0.5` for 512 MiB. Default: `1`. The first 256 KiB per channel is free, so exhaustion never rejects a new channel; it only prevents further growth. Credit already advertised to the peer remains charged after a shrink until that credit is consumed.
+
+Protocol-validation failures are appended to `error-YYYY-MM-DD.log` in the process working directory. File dates and timestamps use UTC, allowing old files to be removed by date. Each entry includes the reason, remote address, and at most the first 100 received bytes as hexadecimal.
 
 #### UDP behavior
 

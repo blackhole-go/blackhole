@@ -597,64 +597,6 @@ func TestSingleServerBestMuxIgnoresHealth(t *testing.T) {
 	}
 }
 
-func TestHasUnhealthyAllocatableTCPMux(t *testing.T) {
-	identity := serverIdentity{addr: "127.0.0.1", port: "1", key: "same-key"}
-	client := &Client{
-		muxConns: []*clientMuxConn{
-			{
-				mc:             &mux.MuxConn{},
-				serverIdentity: identity,
-			},
-		},
-		stats: map[serverIdentity]*serverHealth{
-			identity: {
-				class:         serverHealthDegraded,
-				healthPenalty: -1,
-				hasConnected:  true,
-				lastDecay:     time.Now(),
-			},
-		},
-	}
-
-	if !client.hasUnhealthyAllocatableTCPMux(identity) {
-		t.Fatal("expected unhealthy allocatable mux")
-	}
-
-	client.markServerConnected(identity)
-	if client.hasUnhealthyAllocatableTCPMux(identity) {
-		t.Fatal("healthy mux should not be treated as unhealthy pending")
-	}
-}
-
-func TestSingleServerDoesNotBlockOnUnhealthyMux(t *testing.T) {
-	identity := serverIdentity{addr: "127.0.0.1", port: "1", key: "same-key"}
-	candidate := &clientServerState{
-		entry:    config.ServerEntry{ServerAddr: "127.0.0.1:1", Key: "same-key"},
-		identity: identity,
-	}
-	client := &Client{
-		servers: []*clientServerState{candidate},
-		muxConns: []*clientMuxConn{
-			{
-				mc:             &mux.MuxConn{},
-				serverIdentity: identity,
-			},
-		},
-		stats: map[serverIdentity]*serverHealth{
-			identity: {
-				class:         serverHealthDegraded,
-				healthPenalty: -1,
-				hasConnected:  true,
-				lastDecay:     time.Now(),
-			},
-		},
-	}
-
-	if client.hasUnhealthyAllocatableTCPMux(identity) {
-		t.Fatal("single-server mode should not block on unhealthy allocatable mux")
-	}
-}
-
 func TestRecordServerSpeedRestoresHealth(t *testing.T) {
 	identity := serverIdentity{addr: "127.0.0.1", port: "1", key: "same-key"}
 	now := time.Now()
@@ -944,7 +886,27 @@ func TestSingleServerCandidatesIgnoreNoResponseCooldown(t *testing.T) {
 	}
 }
 
-func TestSortedServerCandidatesBreaksDialFailedCooldownWhenAllBlocked(t *testing.T) {
+func TestSelectCoolingServerUsesInverseLogWeights(t *testing.T) {
+	now := time.Now()
+	short := &clientServerState{entry: config.ServerEntry{ServerAddr: "127.0.0.1:1"}}
+	long := &clientServerState{entry: config.ServerEntry{ServerAddr: "127.0.0.1:2"}}
+	candidates := []coolingServerCandidate{
+		{server: short, nextRetry: now.Add(9 * time.Second)},
+		{server: long, nextRetry: now.Add(99 * time.Second)},
+	}
+
+	shortWeight := 1 / math.Log1p(9)
+	longWeight := 1 / math.Log1p(99)
+	shortShare := shortWeight / (shortWeight + longWeight)
+	if selected := selectCoolingServer(candidates, now, shortShare/2); selected != short {
+		t.Fatalf("selected=%p, want short-cooldown server %p", selected, short)
+	}
+	if selected := selectCoolingServer(candidates, now, shortShare+(1-shortShare)/2); selected != long {
+		t.Fatalf("selected=%p, want long-cooldown server %p", selected, long)
+	}
+}
+
+func TestSortedServerCandidatesSelectsOneAcrossFailureCooldowns(t *testing.T) {
 	now := time.Now()
 	firstIdentity := serverIdentity{addr: "127.0.0.1", port: "1", key: "same-key"}
 	secondIdentity := serverIdentity{addr: "127.0.0.1", port: "2", key: "same-key"}
@@ -965,7 +927,7 @@ func TestSortedServerCandidatesBreaksDialFailedCooldownWhenAllBlocked(t *testing
 				lastDecay: now,
 			},
 			secondIdentity: {
-				class:     serverHealthDialFailed,
+				class:     serverHealthNoResponse,
 				nextRetry: now.Add(10 * time.Second),
 				lastDecay: now,
 			},
@@ -973,8 +935,8 @@ func TestSortedServerCandidatesBreaksDialFailedCooldownWhenAllBlocked(t *testing
 	}
 
 	candidates := client.sortedServerCandidates()
-	if len(candidates) != 1 || candidates[0] != second {
-		t.Fatalf("candidates=%v, want earliest dial-failed retry", candidates)
+	if len(candidates) != 1 || (candidates[0] != first && candidates[0] != second) {
+		t.Fatalf("candidates=%v, want one cooling server", candidates)
 	}
 }
 

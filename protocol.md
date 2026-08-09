@@ -304,6 +304,8 @@ When traffic is imbalanced, the connection may also send a probabilistic channel
 
 For channel `3`, direct clients send `proxy_level=0`. Each reverse-route hop increments it before forwarding the request. A server rejects the request and logs loop detection when `proxy_level >= 16`.
 
+Channel `4` fragments reassemble into a JSON object with `accept`, `reject`, `ipv6_prefix96`, and optional unsigned integer `priority` fields. Missing `priority`, including updates sent by older versions, means `256`. Smaller priority values are matched first; within the same priority, newer registrations are matched before older registrations. Receivers that predate `priority` ignore the additional JSON field.
+
 Channel `0` carries whole-mux keep-alive/auth controls and per-data-channel
 setup/lifecycle controls. Its complete payload definition is in
 [Channel 0 Control](#channel-0-control).
@@ -367,7 +369,7 @@ Flow control uses channel `2`. Its encrypted payload is:
 
 Servers are identified by `(server_addr host, server_addr port, key)`, so future config reloads can match the same server without relying on list indexes.
 
-For TCP `CONNECT`, the client first tries to allocate from an existing healthy mux. It creates a new TCP mux only when no healthy existing mux can allocate a channel. If an existing mux for a server is still allocatable but unhealthy, the client avoids opening more muxes to that same server until its state changes, preventing rapid repeated connections to a failing endpoint.
+For TCP `CONNECT`, the client first tries to allocate from an existing healthy mux. It creates a new TCP mux only when no healthy existing mux can allocate a channel. An unhealthy existing mux is not reused, but it does not prevent the client from opening another mux.
 
 Server health classes are ordered from worst to best as `NoResponse`, `BadResponse`, `DialFailed`, `Degraded`, and `Good`:
 
@@ -377,7 +379,7 @@ Server health classes are ordered from worst to best as `NoResponse`, `BadRespon
 - `Degraded`: a previously usable server had transient channel timeout, mux write failure, write timeout, or an unexpected mux close while channels were active.
 - `Good`: the server has no active penalty.
 
-Health penalties decay every 5 minutes by multiplying the negative score by `0.7` and truncating to an integer, so old transient failures eventually stop dominating selection. Each server also tracks the last time for each error kind; repeated errors of the same kind within 2 seconds refresh that timestamp but do not add another penalty or retry-count increment. If every server is in `DialFailed` cooldown, the client allows the one with the earliest retry deadline to try again.
+Health penalties decay every 5 minutes by multiplying the negative score by `0.7` and truncating to an integer, so old transient failures eventually stop dominating selection. Each server also tracks the last time for each error kind; repeated errors of the same kind within 2 seconds refresh that timestamp but do not add another penalty or retry-count increment. A server in any hard-failure cooldown is skipped while another server is ready. If every configured server is cooling down, one is selected randomly with weight `1 / ln(remaining_cooldown_seconds + 1)`, favoring shorter remaining cooldowns without pinning every retry to one server.
 
 Passive speed is tracked per server, shared by all muxes for the same server identity. Traffic is grouped into UTC-second buckets; idle seconds with no traffic are not inserted. A bucket direction is valid when it has at least 8 packets or more than 32 KiB in that direction. Buckets older than 10 minutes are pruned, and at most 30 buckets are retained. Upload and download are scored separately: if fewer than 3 valid buckets exist, all valid buckets are averaged; otherwise the best consecutive 3-bucket average is used. The final speed is the larger of the upload and download scores. Servers without measured speed start with a default `1 MiB/s` score.
 

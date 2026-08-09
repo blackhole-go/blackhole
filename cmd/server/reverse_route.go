@@ -21,6 +21,7 @@ type reverseRouteUpdate struct {
 	Accept       []string `json:"accept"`
 	Reject       []string `json:"reject"`
 	IPv6Prefix96 string   `json:"ipv6_prefix96"`
+	Priority     *uint32  `json:"priority,omitempty"`
 }
 
 type reverseRouteEntry struct {
@@ -46,7 +47,18 @@ func (m *reverseRouteManager) register(mc *mux.MuxConn, route *compiledReverseRo
 			out = append(out, entry)
 		}
 	}
-	m.entries = append(out, &reverseRouteEntry{mc: mc, route: route})
+	entry := &reverseRouteEntry{mc: mc, route: route}
+	insertAt := len(out)
+	for i, current := range out {
+		if route.priority <= current.route.priority {
+			insertAt = i
+			break
+		}
+	}
+	out = append(out, nil)
+	copy(out[insertAt+1:], out[insertAt:])
+	out[insertAt] = entry
+	m.entries = out
 }
 
 func (m *reverseRouteManager) removeMux(mc *mux.MuxConn) {
@@ -74,8 +86,7 @@ func (m *reverseRouteManager) matchEntries(req *socks5.Request) []*reverseRouteE
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]*reverseRouteEntry, 0, len(m.entries))
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		entry := m.entries[i]
+	for _, entry := range m.entries {
 		if entry.route.reject.matches(target) {
 			continue
 		}
@@ -108,8 +119,9 @@ func makeRouteTarget(req *socks5.Request) routeTarget {
 }
 
 type compiledReverseRoute struct {
-	accept routeRuleSet
-	reject routeRuleSet
+	accept   routeRuleSet
+	reject   routeRuleSet
+	priority uint32
 }
 
 func compileReverseRouteConfig(cfg config.ReverseRouteConfig) (*compiledReverseRoute, error) {
@@ -121,7 +133,11 @@ func compileReverseRouteConfig(cfg config.ReverseRouteConfig) (*compiledReverseR
 	if err != nil {
 		return nil, fmt.Errorf("compile reject route: %w", err)
 	}
-	return &compiledReverseRoute{accept: accept, reject: reject}, nil
+	return &compiledReverseRoute{
+		accept:   accept,
+		reject:   reject,
+		priority: cfg.PriorityValue(),
+	}, nil
 }
 
 type routeRuleSet struct {
