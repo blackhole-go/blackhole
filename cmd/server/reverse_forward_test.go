@@ -59,6 +59,43 @@ func TestConfigureReverseMuxCapacityUsesAllocationLimit(t *testing.T) {
 	}
 }
 
+func TestReverseUpstreamMuxReplacementReasonUsesOneDayAge(t *testing.T) {
+	mc := &testReverseUpstreamMuxStatus{maxAllocations: constants.MaxConfigurableChannelAllocations}
+
+	if got := reverseUpstreamMuxReplacementReason(mc, reverseUpstreamMaxPrimaryAge-time.Second); got != reverseUpstreamReplacementNone {
+		t.Fatalf("replacement reason before max age=%q, want none", got)
+	}
+	if got := reverseUpstreamMuxReplacementReason(mc, reverseUpstreamMaxPrimaryAge); got != reverseUpstreamReplacementAge {
+		t.Fatalf("replacement reason at max age=%q, want %q", got, reverseUpstreamReplacementAge)
+	}
+	mc.allocations = constants.MaxConfigurableChannelAllocations/2 + 1
+	if got := reverseUpstreamMuxReplacementReason(mc, 0); got != reverseUpstreamReplacementAllocation {
+		t.Fatalf("allocation replacement reason=%q, want %q", got, reverseUpstreamReplacementAllocation)
+	}
+	mc.closed = true
+	if got := reverseUpstreamMuxReplacementReason(mc, reverseUpstreamMaxPrimaryAge); got != reverseUpstreamReplacementClosed {
+		t.Fatalf("closed replacement reason=%q, want %q", got, reverseUpstreamReplacementClosed)
+	}
+}
+
+type testReverseUpstreamMuxStatus struct {
+	closed         bool
+	allocations    int
+	maxAllocations int
+}
+
+func (m *testReverseUpstreamMuxStatus) IsClosed() bool {
+	return m.closed
+}
+
+func (m *testReverseUpstreamMuxStatus) AllocationCount() int {
+	return m.allocations
+}
+
+func (m *testReverseUpstreamMuxStatus) MaxChannelAllocations() int {
+	return m.maxAllocations
+}
+
 func TestReverseRouteUnavailableFallsBackToLocalACL(t *testing.T) {
 	route, err := compileReverseRouteConfig(config.ReverseRouteConfig{
 		Accept: []string{".example.com"},

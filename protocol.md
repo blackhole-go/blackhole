@@ -363,7 +363,7 @@ Flow control uses channel `2`. Its encrypted payload is:
 - Each client mux can keep 32 active data channels by default, configurable up to 224.
 - A client mux stops accepting new channels after 600 seconds by default, configurable in `[60,3600]` seconds. Existing channels continue running.
 - Concurrent requests waiting for a new TCP mux are grouped into batches of at most 16; excess waiters start another mux creation in parallel.
-- A server-to-server reverse upstream mux has no allocation-age limit and uses 224 as both its allocation and active-channel limit. Once its allocation count exceeds 112, the server registers a replacement mux while the older mux remains usable until close or exhaustion.
+- A server-to-server reverse upstream mux has no ordinary client allocation-age limit and uses 224 as both its allocation and active-channel limit. The initiating server registers a replacement after 24 hours or once the allocation count exceeds 112. The previous mux continues refresh-idle keepalives until the replacement authenticates and sends its route update; it then stops refresh-idle keepalives and may drain existing channels until normal idle handling closes it.
 
 ### Client Server Selection
 
