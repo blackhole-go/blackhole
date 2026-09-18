@@ -48,6 +48,9 @@ func TestGeneratePoolDeterminism(t *testing.T) {
 	const v = uint64(0x1234567890abcdef)
 	p1 := GeneratePool(v)
 	p2 := GeneratePool(v)
+	if p1.InvalidDrainLogOffset != p2.InvalidDrainLogOffset {
+		t.Fatalf("InvalidDrainLogOffset mismatch: %d vs %d", p1.InvalidDrainLogOffset, p2.InvalidDrainLogOffset)
+	}
 
 	if p1.Threshold != p2.Threshold {
 		t.Errorf("Threshold mismatch: %d vs %d", p1.Threshold, p2.Threshold)
@@ -98,6 +101,9 @@ func TestGeneratePoolDeterminism(t *testing.T) {
 func TestGeneratePoolRanges(t *testing.T) {
 	for seed := uint64(0); seed < 20; seed++ {
 		pool := GeneratePool(seed)
+		if pool.InvalidDrainLogOffset < 1 || pool.InvalidDrainLogOffset > 64 {
+			t.Fatalf("seed %d: InvalidDrainLogOffset=%d outside [1,64]", seed, pool.InvalidDrainLogOffset)
+		}
 
 		if pool.HandshakeHeader.Len < constants.HandshakeObfHeaderMinLen || pool.HandshakeHeader.Len > constants.HandshakeObfMagicMaxLen {
 			t.Errorf("seed %d: HandshakeHeader.Len %d not in [%d,%d]",

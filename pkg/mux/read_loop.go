@@ -50,16 +50,34 @@ func (mc *MuxConn) readLoop() {
 		}
 		mc.closeMu.RUnlock()
 
-		// اگر در وضعیت نامعتبر باشد، خواندن داده تا فعال شدن timer و بستن اتصال ادامه می‌یابد
+		// Discard invalid traffic; authenticated failures have a byte budget.
 		if InvalidReason(mc.invalidReason.Load()) != InvalidReasonNone {
-			// خواندن داده (و دور ریختن آن) تا زمانی که timer اتصال را ببندد یا خطا رخ دهد ادامه می‌یابد
+			bounded := mc.isServer && mc.hasReceivedTimestamp.Load()
+			buf := drainBuf
+			if bounded {
+				remaining := mc.invalidDrainRemaining.Load()
+				if remaining <= 0 {
+					mc.Close()
+					return
+				}
+				if remaining < int64(len(buf)) {
+					buf = buf[:remaining]
+				}
+			}
 			mc.rawConn.SetReadDeadline(time.Now().Add(time.Duration(constants.SocketIdleTimeout) * time.Second))
-			n, err := mc.rawConn.Read(drainBuf)
+			n, err := mc.rawConn.Read(buf)
+			mc.addBytesReceived(uint64(n))
+			if bounded && n > 0 {
+				mc.lastPacketUnixNano.Store(time.Now().UnixNano())
+				if mc.invalidDrainRemaining.Add(-int64(n)) <= 0 {
+					mc.Close()
+					return
+				}
+			}
 			if err != nil {
 				mc.Close()
 				return
 			}
-			mc.addBytesReceived(uint64(n))
 			continue
 		}
 
@@ -91,6 +109,7 @@ func (mc *MuxConn) readLoop() {
 			}
 			mc.obfV = v
 			mc.hsInfo = hsInfo
+			mc.invalidDrainLogOffset = newPool.InvalidDrainLogOffset
 			mc.conn.SetEpochSeed(v)
 			mc.obfPool.Store(newPool)
 			pool = newPool

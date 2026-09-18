@@ -145,23 +145,24 @@ type header struct {
 
 // Pool holds all derived headers for one connection epoch.
 type Pool struct {
-	HandshakeHeader  header   // dedicated client handshake header
-	DataMagicLen     int      // deterministic magic span for later packet headers
-	DataHeaderHasLen bool     // whether later packet headers carry a 2-byte plaintext len value after magic
-	DataHeaderHasID  bool     // whether later packet headers carry a 2-byte plaintext packet id after magic
-	Threshold        int      // payload-size boundary for large/small classification
-	SmallGroup       []header // data headers for small packets (first N/2 headers)
-	LargeGroup       []header // data headers for large packets (last N-N/2 headers)
-	PaddingThreshold []int    // sorted lower-bound thresholds for deterministic padding buckets
-	PaddingSize      [2][constants.PaddingBucketCount]uint16
-	PaddingRowLimit  [constants.PaddingBucketCount]int
-	MinPadding       uint16    // minimum random padding for special/empty packets
-	MaxPadding       uint16    // maximum random padding for special/empty packets
-	smallCDF         []float64 // precomputed power-law CDF for SmallGroup (α=0.7)
-	largeCDF         []float64 // precomputed power-law CDF for LargeGroup (α=1.5)
-	dataHeaderSet    map[string]struct{}
-	dataLenOffsets   map[string]uint16
-	dataFields       []handshakeFieldKind
+	HandshakeHeader       header   // dedicated client handshake header
+	DataMagicLen          int      // deterministic magic span for later packet headers
+	DataHeaderHasLen      bool     // whether later packet headers carry a 2-byte plaintext len value after magic
+	DataHeaderHasID       bool     // whether later packet headers carry a 2-byte plaintext packet id after magic
+	Threshold             int      // payload-size boundary for large/small classification
+	SmallGroup            []header // data headers for small packets (first N/2 headers)
+	LargeGroup            []header // data headers for large packets (last N-N/2 headers)
+	PaddingThreshold      []int    // sorted lower-bound thresholds for deterministic padding buckets
+	PaddingSize           [2][constants.PaddingBucketCount]uint16
+	PaddingRowLimit       [constants.PaddingBucketCount]int
+	MinPadding            uint16    // minimum random padding for special/empty packets
+	MaxPadding            uint16    // maximum random padding for special/empty packets
+	InvalidDrainLogOffset int       // epoch-derived logarithmic drain offset in [1, 64]
+	smallCDF              []float64 // precomputed power-law CDF for SmallGroup (α=0.7)
+	largeCDF              []float64 // precomputed power-law CDF for LargeGroup (α=1.5)
+	dataHeaderSet         map[string]struct{}
+	dataLenOffsets        map[string]uint16
+	dataFields            []handshakeFieldKind
 }
 
 type versionKind uint8
@@ -243,6 +244,7 @@ var handshakeLayoutCache = struct {
 //  7. padding row selection limit table
 //  8. minimum special-packet padding
 //  9. maximum special-packet padding
+//  10. invalid-drain logarithmic offset
 func GeneratePool(v uint64) *Pool {
 	return GeneratePoolWithType(v, HeaderTypePrintable)
 }
@@ -295,6 +297,7 @@ func GeneratePoolWithKey(v uint64, headerType HeaderType, serverKey string) *Poo
 	small := dataHdrs[:half]
 	large := dataHdrs[half:]
 	paddingThreshold, paddingSize, paddingRowLimit, minPadding, maxPadding := generatePaddingTables(&rng)
+	invalidDrainLogOffset := int(rng.next()%64) + 1
 	dataHeaderSet := make(map[string]struct{}, len(dataHdrs))
 	dataLenOffsets := make(map[string]uint16, len(dataHdrs))
 	for _, h := range dataHdrs {
@@ -304,23 +307,24 @@ func GeneratePoolWithKey(v uint64, headerType HeaderType, serverKey string) *Poo
 	}
 
 	return &Pool{
-		HandshakeHeader:  header{Len: hsLen, Head: hsHead, LenOffset: hsLenOffset},
-		DataMagicLen:     layout.DataMagicLen,
-		DataHeaderHasLen: layout.DataHasLen,
-		DataHeaderHasID:  layout.DataHasID,
-		Threshold:        threshold,
-		SmallGroup:       small,
-		LargeGroup:       large,
-		PaddingThreshold: paddingThreshold,
-		PaddingSize:      paddingSize,
-		PaddingRowLimit:  paddingRowLimit,
-		MinPadding:       minPadding,
-		MaxPadding:       maxPadding,
-		smallCDF:         buildCDF(small, 0.7),
-		largeCDF:         buildCDF(large, 1.5),
-		dataHeaderSet:    dataHeaderSet,
-		dataLenOffsets:   dataLenOffsets,
-		dataFields:       append([]handshakeFieldKind(nil), layout.DataFields...),
+		HandshakeHeader:       header{Len: hsLen, Head: hsHead, LenOffset: hsLenOffset},
+		DataMagicLen:          layout.DataMagicLen,
+		DataHeaderHasLen:      layout.DataHasLen,
+		DataHeaderHasID:       layout.DataHasID,
+		Threshold:             threshold,
+		SmallGroup:            small,
+		LargeGroup:            large,
+		PaddingThreshold:      paddingThreshold,
+		PaddingSize:           paddingSize,
+		PaddingRowLimit:       paddingRowLimit,
+		MinPadding:            minPadding,
+		MaxPadding:            maxPadding,
+		InvalidDrainLogOffset: invalidDrainLogOffset,
+		smallCDF:              buildCDF(small, 0.7),
+		largeCDF:              buildCDF(large, 1.5),
+		dataHeaderSet:         dataHeaderSet,
+		dataLenOffsets:        dataLenOffsets,
+		dataFields:            append([]handshakeFieldKind(nil), layout.DataFields...),
 	}
 }
 

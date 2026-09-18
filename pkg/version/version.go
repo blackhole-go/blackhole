@@ -6,7 +6,7 @@ import (
 )
 
 // Version is source-defined so build flags cannot change protocol derivation.
-const Version = "2.5.4"
+const Version = "2.5.5"
 
 func String() string {
 	return fmt.Sprintf("Blackhole %s", Version)

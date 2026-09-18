@@ -108,7 +108,7 @@ func randomLogUniformPaddingRange(min, max int) uint16 {
 	randBytes := make([]byte, 4)
 	rand.Read(randBytes) //nolint:errcheck
 	u := float64(binary.BigEndian.Uint32(randBytes)) / (float64(math.MaxUint32) + 1)
-	return uint16(randomLogUniformInclusive(u, min, max))
+	return uint16(randomLogUniformInclusive(u, min, max, constants.PaddingLogOffset))
 }
 
 func randomUint16Range(minInclusive, maxExclusive int) uint16 {
@@ -121,9 +121,8 @@ func randomUint16Range(minInclusive, maxExclusive int) uint16 {
 	return uint16(minInclusive + int(binary.BigEndian.Uint32(b[:])%uint32(span)))
 }
 
-func randomLogUniformInclusive(u float64, min, max int) int {
+func randomLogUniformInclusive(u float64, min, max, offset int) int {
 	if min <= 0 {
-		offset := constants.PaddingLogOffset
 		return randomLogUniformExclusive(u, min+offset, max+1+offset) - offset
 	}
 	return randomLogUniformExclusive(u, min, max+1)

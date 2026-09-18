@@ -3,12 +3,15 @@ package mux
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	mrand "math/rand"
 	"os"
 	"time"
 )
+
+const invalidDrainShift = 32
 
 // InvalidReason کد دلیل وضعیت نامعتبر
 type InvalidReason int
@@ -117,12 +120,25 @@ func invalidTimeoutFromKey(key []byte) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func randomPostTimestampInvalidTimeout() time.Duration {
-	var b [1]byte
+func randomPostTimestampInvalidDrainSize(offset int) int64 {
+	var b [8]byte
+	var u float64
 	if _, err := rand.Read(b[:]); err != nil {
-		return time.Duration(10+mrand.Intn(51)) * time.Second
+		u = mrand.Float64()
+	} else {
+		u = float64(binary.BigEndian.Uint64(b[:])>>11) / (1 << 53)
 	}
-	return time.Duration(10+int(b[0])%51) * time.Second
+	return postTimestampInvalidDrainSize(u, offset)
+}
+
+func postTimestampInvalidDrainSize(u float64, offset int) int64 {
+	// Shift both the range and logarithmic offset so sampling is equivalent
+	// to drawing from [0, 4095] with the epoch offset, then subtracting 32.
+	size := randomLogUniformInclusive(u, -invalidDrainShift, 4095-invalidDrainShift, offset+invalidDrainShift)
+	if size <= 0 {
+		return 0
+	}
+	return int64(size)
 }
 
 func (mc *MuxConn) startInvalidDeadlineTimer() {
@@ -136,35 +152,50 @@ func (mc *MuxConn) startInvalidDeadlineTimer() {
 		mc.invalidMu.Lock()
 		mc.invalidTimer = nil
 		mc.invalidMu.Unlock()
-		if !mc.hasReceivedTimestamp.Load() || InvalidReason(mc.invalidReason.Load()) != InvalidReasonNone {
+		if !mc.hasReceivedTimestamp.Load() {
 			mc.Close()
 		}
 	})
 	mc.invalidMu.Unlock()
 }
 
-// SetInvalid اتصال را به عنوان وضعیت نامعتبر علامت‌گذاری می‌کند
+// IsInvalid reports whether the mux is discarding incoming traffic.
+func (mc *MuxConn) IsInvalid() bool {
+	return InvalidReason(mc.invalidReason.Load()) != InvalidReasonNone
+}
+
+// SetInvalid marks the mux as invalid.
 func (mc *MuxConn) SetInvalid(reason InvalidReason) {
+	mc.invalidMu.Lock()
+	if InvalidReason(mc.invalidReason.Load()) != InvalidReasonNone {
+		mc.invalidMu.Unlock()
+		return
+	}
+	authenticated := mc.isServer && mc.hasReceivedTimestamp.Load()
+	if authenticated && reason != InvalidReasonNone {
+		mc.invalidDrainRemaining.Store(randomPostTimestampInvalidDrainSize(mc.invalidDrainLogOffset))
+		mc.lastPacketUnixNano.Store(time.Now().UnixNano())
+		if mc.invalidTimer != nil {
+			mc.invalidTimer.Stop()
+			mc.invalidTimer = nil
+		}
+	}
 	mc.invalidReason.Store(int32(reason))
+	mc.invalidMu.Unlock()
 	if mc.isServer && reason != InvalidReasonNone {
 		logInvalidReason(mc.remoteAddr, reason, mc.hasReceivedTimestamp.Load(), mc.rawInputHex())
 	}
 
-	if !mc.isServer || reason == InvalidReasonNone || time.Until(mc.invalidDeadline) > 0 {
+	if !mc.isServer || reason == InvalidReasonNone {
 		return
 	}
-	if !mc.hasReceivedTimestamp.Load() {
-		mc.Close()
-		return
-	}
-	mc.invalidMu.Lock()
-	defer mc.invalidMu.Unlock()
-	if mc.invalidTimer == nil {
-		mc.invalidTimer = time.AfterFunc(randomPostTimestampInvalidTimeout(), func() {
-			mc.invalidMu.Lock()
-			mc.invalidTimer = nil
-			mc.invalidMu.Unlock()
+	if authenticated {
+		if mc.invalidDrainRemaining.Load() == 0 {
 			mc.Close()
-		})
+		}
+		return
+	}
+	if time.Until(mc.invalidDeadline) <= 0 {
+		mc.Close()
 	}
 }

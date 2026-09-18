@@ -15,6 +15,30 @@ type scriptedReverseResponseReader struct {
 	timeouts  []time.Duration
 }
 
+func TestReverseForwardSkipsInvalidMuxWithoutClosingDrain(t *testing.T) {
+	mc := &mux.MuxConn{}
+	mc.SetInvalid(mux.InvalidReasonPacketMAC)
+	route, err := compileReverseRouteConfig(config.ReverseRouteConfig{Accept: []string{".example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{reverseRoutes: &serverReverseRoutes{
+		routes: newReverseRouteManager(), recv: newReverseRouteReceiver(),
+	}}
+	s.reverseRoutes.routes.register(mc, route)
+	req := &socks5.Request{DstAddr: "www.example.com", DstPort: 443}
+	if s.forwardViaReverseRoute(nil, req, 0, req.Encode()) {
+		t.Fatal("invalid route consumed request instead of allowing fallback")
+	}
+	if len(s.reverseRoutes.routes.matchEntries(req)) != 0 || mc.IsClosed() {
+		t.Fatal("invalid route must be removed without closing its drain connection")
+	}
+	s.removeReverseRouteMux(mc, true)
+	if mc.IsClosed() || reverseMuxTemporarilyFull(mc) {
+		t.Fatal("invalid mux must remain draining and must not be treated as temporarily full")
+	}
+}
+
 func (r *scriptedReverseResponseReader) ReadWithTimeout(timeout time.Duration) ([]byte, bool, error) {
 	r.timeouts = append(r.timeouts, timeout)
 	if len(r.responses) == 0 {

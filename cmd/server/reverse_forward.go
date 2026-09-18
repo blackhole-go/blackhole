@@ -19,7 +19,7 @@ func (s *Server) forwardViaReverseRoute(clientChannel *mux.Channel, req *socks5.
 	}
 
 	for _, entry := range entries {
-		if entry.mc == nil || entry.mc.IsClosed() {
+		if entry.mc == nil || entry.mc.IsClosed() || entry.mc.IsInvalid() {
 			s.removeReverseRouteMux(entry.mc, false)
 			continue
 		}
@@ -93,14 +93,14 @@ func readReverseChannelTargetResponse(channel reverseChannelResponseReader, time
 func (s *Server) removeReverseRouteMux(mc *mux.MuxConn, closeMux bool) {
 	s.reverseRoutes.routes.removeMux(mc)
 	s.reverseRoutes.recv.reset(mc)
-	if closeMux && mc != nil {
+	if closeMux && mc != nil && !mc.IsInvalid() {
 		_ = mc.Close()
 	}
 }
 
 func reverseMuxTemporarilyFull(mc *mux.MuxConn) bool {
 	snapshot := mc.AllocationSnapshot()
-	return !snapshot.Closed &&
+	return !snapshot.Closed && !mc.IsInvalid() &&
 		!snapshot.AgeExpired &&
 		snapshot.AllocCount < snapshot.MaxAllocCount &&
 		snapshot.ActiveCount >= snapshot.MaxActiveCount

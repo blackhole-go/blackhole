@@ -152,6 +152,7 @@ Header pools are sensitive to the exact PRNG consumption order. Both client and 
 9. Build `PaddingRowLimit[256]` from PCG32; each value is `next() % 128`, producing `0..127`.
 10. Generate `MinPadding = MinPaddingMin + byte(next())`, producing `16..271`.
 11. Generate `MaxPadding = next() % 4096 + 4096`, producing `4096..8191`.
+12. Generate `InvalidDrainLogOffset = next() % 64 + 1`, uniformly producing `1..64`. This consumes the next PCG32 output after all existing pool fields have been generated. The receiving server pins this value from the initial epoch pool for the lifetime of the mux, including after a reverse-route pool switch.
 
 Deterministic head bytes are generated one byte at a time:
 
@@ -543,7 +544,7 @@ This allows UDP applications such as BitTorrent and video calls to work normally
 
 ## Invalid Drain Mode
 
-When a connection enters invalid state before timestamp authentication, the server continues reading and discarding data until a timeout closes the connection. The timeout is derived from `key` and is in the range 8-39 seconds. The close deadline is fixed at socket creation time as `created_at + timeout`; entering invalid state later only waits until that existing deadline. The server also closes the socket if the timestamp packet has not authenticated before the same deadline. After timestamp authentication and after that fixed deadline has passed, a later authentication failure enters a second drain stage with a random 10-60 second timeout.
+When a connection enters invalid state before timestamp authentication, the server continues reading and discarding data until a timeout closes the connection. The timeout is derived from `key` and is in the range 8-39 seconds. The close deadline is fixed at socket creation time as `created_at + timeout`; entering invalid state later only waits until that existing deadline. The server also closes the socket if the timestamp packet has not authenticated before the same deadline. After timestamp authentication, a validation failure draws a fresh value in `-32..4063` with `randomLogUniformInclusive(U, -32, 4063, offset + 32)`, where `U` is uniform in `[0, 1)` and `offset` is the initial epoch pool's `InvalidDrainLogOffset` in `1..64`. This is equivalent to sampling `0..4095` with the epoch offset and then subtracting 32. Values less than or equal to zero close immediately; positive values specify the number of subsequent bytes to receive and discard before closing. The server also closes on a read error or after 120 seconds without further incoming data. The earlier handshake deadline no longer closes an authenticated connection.
 
 Current invalid-state causes include:
 

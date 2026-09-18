@@ -64,6 +64,9 @@ func IsChannelClosedError(err error) bool {
 func (mc *MuxConn) AllocChannel() (*Channel, error) {
 	mc.channelsMu.Lock()
 	defer mc.channelsMu.Unlock()
+	if mc.IsInvalid() {
+		return nil, errors.New("connection invalid")
+	}
 
 	mc.closeMu.RLock()
 	if mc.closed {
@@ -102,6 +105,9 @@ func (mc *MuxConn) AllocChannel() (*Channel, error) {
 }
 
 func (mc *MuxConn) RegisterRequestedChannel(channelID uint8) (*Channel, error) {
+	if mc.IsInvalid() {
+		return nil, errors.New("connection invalid")
+	}
 	if channelID < uint8(constants.FirstChannelID) {
 		return nil, errors.New("invalid channel id")
 	}
@@ -142,7 +148,7 @@ func (mc *MuxConn) CanAllocChannel() bool {
 	mc.closeMu.RLock()
 	defer mc.closeMu.RUnlock()
 
-	return !mc.closed &&
+	return !mc.closed && !mc.IsInvalid() &&
 		mc.allocCount < mc.maxChannelAllocationsLocked() &&
 		!mc.channelAllocationAgeExpiredLocked(time.Now()) &&
 		mc.activeCount < mc.maxConcurrentChannelsLocked()

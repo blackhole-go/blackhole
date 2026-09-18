@@ -1182,12 +1182,17 @@ func TestAllocChannelMarksChannelIDUsed(t *testing.T) {
 
 func TestObfPoolFromUserPasswordUsesCurrentLayout(t *testing.T) {
 	mc := &MuxConn{
-		headerKey:  "layout-key",
-		headerType: obfheader.HeaderTypeAlnum,
+		headerKey:             "layout-key",
+		headerType:            obfheader.HeaderTypeAlnum,
+		invalidDrainLogOffset: 17,
 	}
 
 	next := mc.ObfPoolFromUserPassword("user-password")
 	if next.DataMagicLen < constants.DataObfHeaderMinLen {
 		t.Fatalf("next DataMagicLen=%d, want at least %d", next.DataMagicLen, constants.DataObfHeaderMinLen)
+	}
+	mc.SwitchObfPoolFromUserPassword("user-password")
+	if mc.invalidDrainLogOffset != 17 {
+		t.Fatal("reverse-route pool switch changed the initial epoch drain offset")
 	}
 }

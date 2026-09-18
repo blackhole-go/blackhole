@@ -67,6 +67,9 @@ func (mc *MuxConn) keepAliveLoop() {
 		case <-mc.keepAliveStop:
 			return
 		case <-ticker.C:
+			if mc.isServer && mc.hasReceivedTimestamp.Load() && InvalidReason(mc.invalidReason.Load()) != InvalidReasonNone {
+				continue // Authenticated invalid connections close on drain completion or read idle timeout.
+			}
 			mc.closeMu.RLock()
 			if mc.closed {
 				mc.closeMu.RUnlock()

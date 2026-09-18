@@ -87,13 +87,15 @@ type MuxConn struct {
 	firstKeepAliveHit          bool
 
 	// موارد مربوط به وضعیت نامعتبر
-	invalidReason   atomic.Int32 // کد دلیل وضعیت نامعتبر (0 یعنی معتبر)
-	invalidMu       sync.Mutex
-	invalidTimer    *time.Timer   // timer وضعیت نامعتبر؛ پس از timeout اتصال قطع می‌شود
-	invalidTimeout  time.Duration // مهلت وضعیت نامعتبر (در سرور از key مشتق می‌شود)
-	invalidDeadline time.Time
-	rawLogMu        sync.Mutex
-	rawLogPrefix    []byte
+	invalidReason         atomic.Int32 // کد دلیل وضعیت نامعتبر (0 یعنی معتبر)
+	invalidDrainRemaining atomic.Int64 // bytes to discard after authenticated validation failure
+	invalidDrainLogOffset int          // pinned to the initial epoch pool, even after a reverse-route pool switch
+	invalidMu             sync.Mutex
+	invalidTimer          *time.Timer   // timer وضعیت نامعتبر؛ پس از timeout اتصال قطع می‌شود
+	invalidTimeout        time.Duration // مهلت وضعیت نامعتبر (در سرور از key مشتق می‌شود)
+	invalidDeadline       time.Time
+	rawLogMu              sync.Mutex
+	rawLogPrefix          []byte
 
 	// موارد مربوط به تأیید timestamp
 	hasSentTimestamp     bool        // آیا بسته timestamp ارسال شده است
