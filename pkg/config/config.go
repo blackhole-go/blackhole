@@ -11,18 +11,19 @@ import (
 )
 
 const (
-	DefaultServerResponseTimeout     = 20
-	DefaultUDPAssociateIdleTimeout   = 60
-	DefaultMaxMuxAge                 = 600
-	MinMaxMuxAge                     = 60
-	MaxMaxMuxAge                     = 3600
-	DefaultDNSCacheTTL               = 1200
-	DefaultDNSCacheSize              = 4096
-	DefaultFakeDNSTTL                = 1200
-	DefaultFakeDNSSize               = 1024
-	DefaultFakeDNSIPv6Prefix96       = "fdff:ffff:ffff:ffff::/96"
-	DefaultFlowControlBufferLimitGiB = 1.0
-	DefaultReverseRoutePriority      = uint32(256)
+	DefaultServerResponseTimeout      = 20
+	DefaultUDPAssociateIdleTimeout    = 60
+	DefaultMaxMuxAge                  = 600
+	MinMaxMuxAge                      = 60
+	MaxMaxMuxAge                      = 3600
+	DefaultDNSCacheTTL                = 1200
+	DefaultDNSCacheSize               = 4096
+	DefaultFakeDNSTTL                 = 1200
+	DefaultFakeDNSSize                = 1024
+	DefaultFakeDNSIPv6Prefix96        = "fdff:ffff:ffff:ffff::/96"
+	DefaultFlowControlBufferLimitGiB  = 1.0
+	DefaultReverseRoutePriority       = uint32(256)
+	DefaultReverseUpstreamConnections = 1
 )
 
 var defaultDNSUpstreamAddrs = []string{"system", "1.1.1.1:53", "8.8.8.8:53"}
@@ -68,7 +69,15 @@ func (c ReverseRouteConfig) PriorityValue() uint32 {
 
 type ReverseUpstreamConfig struct {
 	ServerEntry
-	Route ReverseRouteConfig `json:"route"`
+	Connections int                `json:"connections,omitempty"`
+	Route       ReverseRouteConfig `json:"route"`
+}
+
+func (c ReverseUpstreamConfig) ConnectionCount() int {
+	if c.Connections <= 0 {
+		return DefaultReverseUpstreamConnections
+	}
+	return c.Connections
 }
 
 type ACLConfig struct {

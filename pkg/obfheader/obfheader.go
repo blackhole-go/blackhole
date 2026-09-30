@@ -158,8 +158,8 @@ type Pool struct {
 	MinPadding            uint16    // minimum random padding for special/empty packets
 	MaxPadding            uint16    // maximum random padding for special/empty packets
 	InvalidDrainLogOffset int       // epoch-derived logarithmic drain offset in [1, 64]
-	smallCDF              []float64 // precomputed power-law CDF for SmallGroup (α=0.7)
-	largeCDF              []float64 // precomputed power-law CDF for LargeGroup (α=1.5)
+	smallCDF              []float64 // precomputed power-law CDF for SmallGroup (alpha=0.7)
+	largeCDF              []float64 // precomputed power-law CDF for LargeGroup (alpha=1.5)
 	dataHeaderSet         map[string]struct{}
 	dataLenOffsets        map[string]uint16
 	dataFields            []handshakeFieldKind

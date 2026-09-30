@@ -47,8 +47,19 @@ func (s *Server) forwardViaReverseRoute(clientChannel *mux.Channel, req *socks5.
 		response, timedOut, err := readReverseChannelTargetResponse(reverseChannel, targetConnectTimeout)
 		if timedOut || err != nil {
 			log.Printf("Read reverse channel response error: remote=%s timeout=%t error=%v", entry.mc.RemoteName(), timedOut, err)
-			reverseChannel.Close()
-			s.removeReverseRouteMux(entry.mc, true)
+			var abortErr error
+			if entry.mc.IsClosed() || entry.mc.IsInvalid() {
+				_ = reverseChannel.Close()
+			} else {
+				abortErr = reverseChannel.Abort()
+			}
+			removeRoute, closeMux := reverseChannelFailureDisposition(entry.mc, abortErr)
+			if abortErr != nil {
+				log.Printf("Abort reverse channel after response error failed: remote=%s error=%v", entry.mc.RemoteName(), abortErr)
+			}
+			if removeRoute {
+				s.removeReverseRouteMux(entry.mc, closeMux)
+			}
 			continue
 		}
 		if len(response) < 1 || response[0] != constants.ChannelResponseOK {
@@ -96,6 +107,21 @@ func (s *Server) removeReverseRouteMux(mc *mux.MuxConn, closeMux bool) {
 	if closeMux && mc != nil && !mc.IsInvalid() {
 		_ = mc.Close()
 	}
+}
+
+type reverseMuxFailureState interface {
+	IsClosed() bool
+	IsInvalid() bool
+}
+
+func reverseChannelFailureDisposition(mc reverseMuxFailureState, abortErr error) (removeRoute, closeMux bool) {
+	if mc.IsClosed() || mc.IsInvalid() {
+		return true, false
+	}
+	if abortErr != nil {
+		return true, true
+	}
+	return false, false
 }
 
 func reverseMuxTemporarilyFull(mc *mux.MuxConn) bool {

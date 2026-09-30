@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -479,13 +480,16 @@ func TestRealHeaderLenPointsToFirstFakePaddingHeader(t *testing.T) {
 	}
 	_ = cryptoConn.TakeSendNonce()
 	mc := NewMuxConn(cryptoConn, false, []byte("header-key"), []byte("password"), obfheader.HeaderTypePrintable, 13)
+	defer mc.Close()
 	mc.hasSentTimestamp = true
-	mc.obfPool.Store(pool)
+	mc.sendObfPool.Store(pool)
+	mc.recvObfPool.Store(pool)
 
 	payload := []byte{constants.KeepAliveMuxTarget, constants.KeepAliveModeNormal}
 	if err := mc.SendPacket(constants.KeepAliveChannelID, payload); err != nil {
 		t.Fatalf("SendPacket error: %v", err)
 	}
+	waitMuxWriter(t, mc)
 	wire := rawConn.Bytes()
 	paddingStart := constants.DataObfHeaderSize + constants.HeaderSize + len(payload)
 	paddingEnd := paddingStart + paddingLen
@@ -555,6 +559,186 @@ func TestRealHeaderLenPointsToFirstFakePaddingHeader(t *testing.T) {
 		}
 		currentOffset = nextOffset
 		wantPacketID++
+	}
+}
+
+func waitMuxWriter(t *testing.T, mc *MuxConn) {
+	t.Helper()
+	done := make(chan error, 1)
+	if err := mc.enqueueWriteRequest(muxWriteRequest{kind: muxWriteBarrier, done: done}); err != nil {
+		t.Fatalf("enqueue writer barrier: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("writer barrier error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mux writer")
+	}
+}
+
+func TestMuxWriteQueueFullReturnsImmediately(t *testing.T) {
+	mc := &MuxConn{
+		writeQueue: make(chan muxWriteRequest, 1),
+		writerStop: make(chan struct{}),
+	}
+	if err := mc.enqueueWriteRequest(muxWriteRequest{kind: muxWriteBarrier}); err != nil {
+		t.Fatalf("first enqueue error: %v", err)
+	}
+
+	started := time.Now()
+	err := mc.enqueueWriteRequest(muxWriteRequest{kind: muxWriteBarrier})
+	if !errors.Is(err, errMuxWriteQueueFull) {
+		t.Fatalf("second enqueue error=%v, want %v", err, errMuxWriteQueueFull)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("full writer queue blocked for %s", elapsed)
+	}
+}
+
+type blockingWriteConn struct {
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingWriteConn() *blockingWriteConn {
+	return &blockingWriteConn{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *blockingWriteConn) unblock() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+func (c *blockingWriteConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *blockingWriteConn) Write(p []byte) (int, error) {
+	c.startedOnce.Do(func() { close(c.started) })
+	<-c.release
+	return len(p), nil
+}
+func (c *blockingWriteConn) Close() error {
+	c.unblock()
+	return nil
+}
+func (c *blockingWriteConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *blockingWriteConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *blockingWriteConn) SetDeadline(time.Time) error      { return nil }
+func (c *blockingWriteConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *blockingWriteConn) SetWriteDeadline(time.Time) error { return nil }
+
+func newAsyncWriterTestMux(t *testing.T, raw net.Conn) *MuxConn {
+	t.Helper()
+	cryptoConn, err := crypto.NewClientCryptoConn(raw, "sample", []byte("password"), 13)
+	if err != nil {
+		t.Fatalf("NewClientCryptoConn error: %v", err)
+	}
+	_ = cryptoConn.TakeSendNonce()
+	mc := NewMuxConn(cryptoConn, false, []byte("header-key"), []byte("password"), obfheader.HeaderTypePrintable, 13)
+	mc.hasSentTimestamp = true
+	return mc
+}
+
+func TestSendPacketReturnsWhileSocketWriteBlocked(t *testing.T) {
+	raw := newBlockingWriteConn()
+	mc := newAsyncWriterTestMux(t, raw)
+	defer mc.Close()
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- mc.SendPacket(constants.KeepAliveChannelID, []byte{constants.KeepAliveMuxTarget, constants.KeepAliveModeNormal})
+	}()
+
+	select {
+	case err := <-sendDone:
+		if err != nil {
+			t.Fatalf("SendPacket error: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("SendPacket blocked on the socket writer")
+	}
+
+	select {
+	case <-raw.started:
+	case <-time.After(time.Second):
+		t.Fatal("dedicated mux writer did not start socket write")
+	}
+
+	raw.unblock()
+	waitMuxWriter(t, mc)
+}
+
+func TestReceivePoolSwitchDoesNotWaitForBlockedWriter(t *testing.T) {
+	raw := newBlockingWriteConn()
+	mc := newAsyncWriterTestMux(t, raw)
+	defer mc.Close()
+	oldPool := mc.sendObfPool.Load()
+
+	if err := mc.SendPacket(constants.KeepAliveChannelID, []byte{constants.KeepAliveMuxTarget, constants.KeepAliveModeNormal}); err != nil {
+		t.Fatalf("SendPacket error: %v", err)
+	}
+	select {
+	case <-raw.started:
+	case <-time.After(time.Second):
+		t.Fatal("dedicated mux writer did not block in socket write")
+	}
+
+	switchDone := make(chan error, 1)
+	go func() {
+		switchDone <- mc.SwitchObfPoolFromUserPassword("next-password")
+	}()
+	select {
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatalf("SwitchObfPoolFromUserPassword error: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("receive-side pool switch blocked on socket writer")
+	}
+
+	nextPool := mc.recvObfPool.Load()
+	if nextPool == nil || nextPool == oldPool {
+		t.Fatal("receive obfuscation pool did not switch immediately")
+	}
+	if got := mc.sendObfPool.Load(); got != oldPool {
+		t.Fatal("send obfuscation pool switched before preceding socket write completed")
+	}
+
+	raw.unblock()
+	waitMuxWriter(t, mc)
+	if got := mc.sendObfPool.Load(); got != nextPool {
+		t.Fatal("send obfuscation pool did not switch in writer order")
+	}
+}
+
+func TestPacketPoolSwitchOccursAfterSocketWrite(t *testing.T) {
+	raw := newBlockingWriteConn()
+	mc := newAsyncWriterTestMux(t, raw)
+	defer mc.Close()
+	oldSend := mc.sendObfPool.Load()
+	oldRecv := mc.recvObfPool.Load()
+	nextPool := mc.ObfPoolFromUserPassword("next-password")
+
+	if err := mc.SendPacketAndSwitchObfPool(constants.ReverseRouteChannelID, []byte{0, 0, 0}, nextPool); err != nil {
+		t.Fatalf("SendPacketAndSwitchObfPool error: %v", err)
+	}
+	select {
+	case <-raw.started:
+	case <-time.After(time.Second):
+		t.Fatal("dedicated mux writer did not block in socket write")
+	}
+	if mc.sendObfPool.Load() != oldSend || mc.recvObfPool.Load() != oldRecv {
+		t.Fatal("obfuscation pool switched before final old-pool packet was written")
+	}
+
+	raw.unblock()
+	waitMuxWriter(t, mc)
+	if mc.sendObfPool.Load() != nextPool || mc.recvObfPool.Load() != nextPool {
+		t.Fatal("obfuscation pools did not switch after final packet write")
 	}
 }
 
@@ -1185,13 +1369,20 @@ func TestObfPoolFromUserPasswordUsesCurrentLayout(t *testing.T) {
 		headerKey:             "layout-key",
 		headerType:            obfheader.HeaderTypeAlnum,
 		invalidDrainLogOffset: 17,
+		writeQueue:            make(chan muxWriteRequest, 2),
+		writerStop:            make(chan struct{}),
 	}
+	go mc.writeLoop()
+	defer close(mc.writerStop)
 
 	next := mc.ObfPoolFromUserPassword("user-password")
 	if next.DataMagicLen < constants.DataObfHeaderMinLen {
 		t.Fatalf("next DataMagicLen=%d, want at least %d", next.DataMagicLen, constants.DataObfHeaderMinLen)
 	}
-	mc.SwitchObfPoolFromUserPassword("user-password")
+	if err := mc.SwitchObfPoolFromUserPassword("user-password"); err != nil {
+		t.Fatalf("SwitchObfPoolFromUserPassword error: %v", err)
+	}
+	waitMuxWriter(t, mc)
 	if mc.invalidDrainLogOffset != 17 {
 		t.Fatal("reverse-route pool switch changed the initial epoch drain offset")
 	}

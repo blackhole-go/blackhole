@@ -50,6 +50,9 @@ func (mc *MuxConn) Close() error {
 		return nil
 	}
 	mc.closed = true
+	if mc.writerStop != nil {
+		close(mc.writerStop)
+	}
 	mc.closeMu.Unlock()
 
 	// متوقف کردن timer وضعیت نامعتبر

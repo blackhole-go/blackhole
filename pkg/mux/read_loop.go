@@ -86,7 +86,7 @@ func (mc *MuxConn) readLoop() {
 
 		// خواندن obf prefix/header متن آشکار: بسته نخست HandshakeObfPrefixSize، بسته‌های بعدی DataObfHeaderSize
 		obfHdrLen := constants.DataObfHeaderSize
-		if mc.obfPool.Load() == nil {
+		if mc.recvObfPool.Load() == nil {
 			obfHdrLen = constants.HandshakeObfPrefixSize
 		}
 		obfHdr := make([]byte, obfHdrLen)
@@ -98,7 +98,7 @@ func (mc *MuxConn) readLoop() {
 		mc.addBytesReceived(uint64(len(obfHdr)))
 
 		// تأیید/مشتق‌سازی pool header مبهم‌سازی
-		pool := mc.obfPool.Load()
+		pool := mc.recvObfPool.Load()
 		isHandshakeObf := pool == nil
 		if pool == nil {
 			// سرور: مشتق‌سازی pool از header دست‌دهی
@@ -111,7 +111,8 @@ func (mc *MuxConn) readLoop() {
 			mc.hsInfo = hsInfo
 			mc.invalidDrainLogOffset = newPool.InvalidDrainLogOffset
 			mc.conn.SetEpochSeed(v)
-			mc.obfPool.Store(newPool)
+			mc.recvObfPool.Store(newPool)
+			mc.sendObfPool.Store(newPool)
 			pool = newPool
 		} else {
 			// تأیید header مبهم‌سازی بسته داده

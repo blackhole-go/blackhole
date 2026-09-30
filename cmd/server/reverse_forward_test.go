@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -67,6 +68,40 @@ func TestReverseForwardConsumesDownstreamAcceptedBeforeFinalResponse(t *testing.
 	}
 }
 
+type testReverseMuxFailureState struct {
+	closed  bool
+	invalid bool
+}
+
+func (m testReverseMuxFailureState) IsClosed() bool {
+	return m.closed
+}
+
+func (m testReverseMuxFailureState) IsInvalid() bool {
+	return m.invalid
+}
+
+func TestReverseChannelTimeoutKeepsHealthyMuxAvailable(t *testing.T) {
+	removeRoute, closeMux := reverseChannelFailureDisposition(testReverseMuxFailureState{}, nil)
+	if removeRoute || closeMux {
+		t.Fatalf("healthy mux disposition remove=%t close=%t, want both false", removeRoute, closeMux)
+	}
+}
+
+func TestReverseChannelAbortFailureClosesHealthyMux(t *testing.T) {
+	removeRoute, closeMux := reverseChannelFailureDisposition(testReverseMuxFailureState{}, errors.New("write failed"))
+	if !removeRoute || !closeMux {
+		t.Fatalf("abort failure disposition remove=%t close=%t, want both true", removeRoute, closeMux)
+	}
+}
+
+func TestReverseChannelFailureRemovesButDoesNotCloseInvalidMux(t *testing.T) {
+	removeRoute, closeMux := reverseChannelFailureDisposition(testReverseMuxFailureState{invalid: true}, errors.New("ignored"))
+	if !removeRoute || closeMux {
+		t.Fatalf("invalid mux disposition remove=%t close=%t, want true,false", removeRoute, closeMux)
+	}
+}
+
 func TestConfigureReverseMuxCapacityUsesAllocationLimit(t *testing.T) {
 	mc := &mux.MuxConn{}
 	if got := mc.AllocationSnapshot().MaxActiveCount; got != constants.MaxConcurrentChannels {
@@ -96,6 +131,11 @@ func TestReverseUpstreamMuxReplacementReasonUsesOneDayAge(t *testing.T) {
 	if got := reverseUpstreamMuxReplacementReason(mc, 0); got != reverseUpstreamReplacementAllocation {
 		t.Fatalf("allocation replacement reason=%q, want %q", got, reverseUpstreamReplacementAllocation)
 	}
+	mc.allocations = 0
+	mc.cannotAlloc = true
+	if got := reverseUpstreamMuxReplacementReason(mc, 0); got != reverseUpstreamReplacementUnavailable {
+		t.Fatalf("unavailable replacement reason=%q, want %q", got, reverseUpstreamReplacementUnavailable)
+	}
 	mc.closed = true
 	if got := reverseUpstreamMuxReplacementReason(mc, reverseUpstreamMaxPrimaryAge); got != reverseUpstreamReplacementClosed {
 		t.Fatalf("closed replacement reason=%q, want %q", got, reverseUpstreamReplacementClosed)
@@ -104,12 +144,17 @@ func TestReverseUpstreamMuxReplacementReasonUsesOneDayAge(t *testing.T) {
 
 type testReverseUpstreamMuxStatus struct {
 	closed         bool
+	cannotAlloc    bool
 	allocations    int
 	maxAllocations int
 }
 
 func (m *testReverseUpstreamMuxStatus) IsClosed() bool {
 	return m.closed
+}
+
+func (m *testReverseUpstreamMuxStatus) CanAllocChannel() bool {
+	return !m.closed && !m.cannotAlloc
 }
 
 func (m *testReverseUpstreamMuxStatus) AllocationCount() int {

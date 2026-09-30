@@ -27,14 +27,16 @@ const (
 type reverseUpstreamReplacementReason string
 
 const (
-	reverseUpstreamReplacementNone       reverseUpstreamReplacementReason = ""
-	reverseUpstreamReplacementClosed     reverseUpstreamReplacementReason = "closed"
-	reverseUpstreamReplacementAllocation reverseUpstreamReplacementReason = "allocation"
-	reverseUpstreamReplacementAge        reverseUpstreamReplacementReason = "age"
+	reverseUpstreamReplacementNone        reverseUpstreamReplacementReason = ""
+	reverseUpstreamReplacementClosed      reverseUpstreamReplacementReason = "closed"
+	reverseUpstreamReplacementAllocation  reverseUpstreamReplacementReason = "allocation"
+	reverseUpstreamReplacementAge         reverseUpstreamReplacementReason = "age"
+	reverseUpstreamReplacementUnavailable reverseUpstreamReplacementReason = "unavailable"
 )
 
 type reverseUpstreamMuxStatus interface {
 	IsClosed() bool
+	CanAllocChannel() bool
 	AllocationCount() int
 	MaxChannelAllocations() int
 }
@@ -45,7 +47,9 @@ func (s *Server) startReverseUpstreams() {
 		if strings.TrimSpace(upstream.ServerAddr) == "" {
 			continue
 		}
-		go s.reverseUpstreamLoop(upstream)
+		for connection := 0; connection < upstream.ConnectionCount(); connection++ {
+			go s.reverseUpstreamLoop(upstream)
+		}
 	}
 }
 
@@ -138,6 +142,10 @@ func (s *Server) reverseUpstreamLoop(upstream config.ReverseUpstreamConfig) {
 			log.Printf("Reverse upstream age threshold reached: %s age=%s", upstream.ServerAddr, time.Since(connectedAt).Truncate(time.Second))
 			retiring = mc
 			retiringReason = replacementReason
+		case reverseUpstreamReplacementUnavailable:
+			log.Printf("Reverse upstream cannot allocate a new channel: %s", upstream.ServerAddr)
+			retiring = mc
+			retiringReason = replacementReason
 		}
 	}
 }
@@ -151,6 +159,9 @@ func reverseUpstreamMuxReplacementReason(mc reverseUpstreamMuxStatus, age time.D
 	}
 	if age >= reverseUpstreamMaxPrimaryAge {
 		return reverseUpstreamReplacementAge
+	}
+	if !mc.CanAllocChannel() {
+		return reverseUpstreamReplacementUnavailable
 	}
 	return reverseUpstreamReplacementNone
 }

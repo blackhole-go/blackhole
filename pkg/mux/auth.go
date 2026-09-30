@@ -21,11 +21,13 @@ func (mc *MuxConn) ObfPoolFromUserPassword(password string) *obfheader.Pool {
 	return obfheader.GeneratePoolWithKey(seed, mc.headerType, mc.headerKey)
 }
 
-func (mc *MuxConn) SwitchObfPoolFromUserPassword(password string) {
+func (mc *MuxConn) SwitchObfPoolFromUserPassword(password string) error {
 	nextPool := mc.ObfPoolFromUserPassword(password)
-	mc.writeMu.Lock()
-	mc.obfPool.Store(nextPool)
-	mc.writeMu.Unlock()
+	mc.recvObfPool.Store(nextPool)
+	return mc.enqueueWriteRequest(muxWriteRequest{
+		kind: muxWriteSwitchSendPool,
+		pool: nextPool,
+	})
 }
 
 func (mc *MuxConn) ensureAuthenticatedUser() {

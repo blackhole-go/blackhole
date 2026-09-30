@@ -64,6 +64,23 @@ func TestReverseRoutePriorityDefaultsAndAllowsZero(t *testing.T) {
 	}
 }
 
+func TestReverseUpstreamConnectionCountDefaultsToOne(t *testing.T) {
+	var upstream ReverseUpstreamConfig
+	if got := upstream.ConnectionCount(); got != DefaultReverseUpstreamConnections {
+		t.Fatalf("default ConnectionCount()=%d, want %d", got, DefaultReverseUpstreamConnections)
+	}
+
+	upstream.Connections = 2
+	if got := upstream.ConnectionCount(); got != 2 {
+		t.Fatalf("explicit ConnectionCount()=%d, want 2", got)
+	}
+
+	upstream.Connections = -1
+	if got := upstream.ConnectionCount(); got != DefaultReverseUpstreamConnections {
+		t.Fatalf("negative ConnectionCount()=%d, want default %d", got, DefaultReverseUpstreamConnections)
+	}
+}
+
 func TestServerDNSHijackCanBeDisabled(t *testing.T) {
 	disabled := false
 	cfg := ServerConfig{DNSHijack: &disabled}

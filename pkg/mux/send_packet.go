@@ -10,43 +10,131 @@ import (
 	"blackhole/pkg/obfheader"
 )
 
+const muxWriteQueueSize = constants.MaxConfigurableChannelAllocations * 4
+
+var errMuxWriteQueueFull = errors.New("mux write queue full")
+
+type muxWriteKind uint8
+
+const (
+	muxWritePacket muxWriteKind = iota
+	muxWriteSwitchSendPool
+	muxWriteBarrier
+)
+
+type muxWriteRequest struct {
+	kind      muxWriteKind
+	channelID uint8
+	payload   []byte
+	pool      *obfheader.Pool
+	nextPool  *obfheader.Pool
+	done      chan error
+}
+
+func (mc *MuxConn) enqueueWriteRequest(req muxWriteRequest) error {
+	if mc.writeQueue == nil {
+		return errors.New("mux writer not initialized")
+	}
+
+	mc.closeMu.RLock()
+	defer mc.closeMu.RUnlock()
+	if mc.closed {
+		return errors.New("connection closed")
+	}
+
+	select {
+	case mc.writeQueue <- req:
+		return nil
+	default:
+		return errMuxWriteQueueFull
+	}
+}
+
+func (mc *MuxConn) writeLoop() {
+	for {
+		select {
+		case <-mc.writerStop:
+			return
+		case req := <-mc.writeQueue:
+			if mc.IsClosed() {
+				if req.done != nil {
+					req.done <- errors.New("connection closed")
+					close(req.done)
+				}
+				return
+			}
+			err := mc.processWriteRequest(req)
+			if req.done != nil {
+				req.done <- err
+				close(req.done)
+			}
+			if err != nil {
+				if !mc.IsClosed() {
+					_ = mc.Close()
+				}
+				return
+			}
+		}
+	}
+}
+
+func (mc *MuxConn) processWriteRequest(req muxWriteRequest) error {
+	switch req.kind {
+	case muxWritePacket:
+		return mc.sendPacketNow(req.channelID, req.payload, req.nextPool)
+	case muxWriteSwitchSendPool:
+		if req.pool == nil {
+			return errors.New("next obf pool is nil")
+		}
+		mc.sendObfPool.Store(req.pool)
+		return nil
+	case muxWriteBarrier:
+		return nil
+	default:
+		return errors.New("invalid mux write request")
+	}
+}
+
 func (mc *MuxConn) nextObfPacketID() uint16 {
 	id := mc.obfPacketID
 	mc.obfPacketID++
 	return id
 }
 
-// SendPacket بسته داده را ارسال می‌کند
+// SendPacket queues a packet for the mux writer and returns without waiting
+// for the underlying socket write.
 func (mc *MuxConn) SendPacket(channelID uint8, payload []byte) error {
-	return mc.sendPacketAndMaybeSwitchPool(channelID, payload, nil)
+	return mc.queuePacket(channelID, payload, nil)
 }
 
 func (mc *MuxConn) SendPacketAndSwitchObfPool(channelID uint8, payload []byte, nextPool *obfheader.Pool) error {
 	if nextPool == nil {
 		return errors.New("next obf pool is nil")
 	}
-	return mc.sendPacketAndMaybeSwitchPool(channelID, payload, nextPool)
+	return mc.queuePacket(channelID, payload, nextPool)
 }
 
-func (mc *MuxConn) sendPacketAndMaybeSwitchPool(channelID uint8, payload []byte, nextPool *obfheader.Pool) error {
-	mc.closeMu.RLock()
-	if mc.closed {
-		mc.closeMu.RUnlock()
-		return errors.New("connection closed")
-	}
-	mc.closeMu.RUnlock()
-
+func (mc *MuxConn) queuePacket(channelID uint8, payload []byte, nextPool *obfheader.Pool) error {
 	if len(payload) > constants.MaxPacketPayloadSize {
 		return errors.New("payload too large")
 	}
 	if len(mc.macKeySnapshot()) == 0 {
 		return errors.New("mux mac key is not initialized")
 	}
+	if mc.sendObfPool.Load() == nil {
+		return errors.New("obf pool not yet established")
+	}
 
-	mc.writeMu.Lock()
-	defer mc.writeMu.Unlock()
+	return mc.enqueueWriteRequest(muxWriteRequest{
+		kind:      muxWritePacket,
+		channelID: channelID,
+		payload:   append([]byte(nil), payload...),
+		nextPool:  nextPool,
+	})
+}
 
-	pool := mc.obfPool.Load()
+func (mc *MuxConn) sendPacketNow(channelID uint8, payload []byte, nextPool *obfheader.Pool) error {
+	pool := mc.sendObfPool.Load()
 	if pool == nil {
 		return errors.New("obf pool not yet established")
 	}
@@ -124,7 +212,8 @@ func (mc *MuxConn) sendPacketAndMaybeSwitchPool(channelID uint8, payload []byte,
 	}
 
 	if nextPool != nil {
-		mc.obfPool.Store(nextPool)
+		mc.sendObfPool.Store(nextPool)
+		mc.recvObfPool.Store(nextPool)
 	}
 
 	mc.recordDataActivity(channelID, len(payload), false)

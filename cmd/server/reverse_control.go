@@ -96,13 +96,20 @@ func (s *Server) handleReverseRoutePacket(mc *mux.MuxConn, packet *mux.Packet) {
 		mc.SetInvalid(mux.InvalidReasonRequestDecode)
 		return
 	}
+	var switchErr error
 	registered := s.withReverseRoutePermission(userName, func(password string) {
 		configureReverseMuxCapacity(mc)
 		s.reverseRoutes.routes.register(mc, route)
-		mc.SwitchObfPoolFromUserPassword(password)
+		switchErr = mc.SwitchObfPoolFromUserPassword(password)
 	})
 	if !registered {
 		s.denyReverseRouteRegistration(mc, userName)
+		return
+	}
+	if switchErr != nil {
+		log.Printf("Reverse route obf pool switch enqueue failed: remote=%s error=%v", mc.RemoteName(), switchErr)
+		s.reverseRoutes.routes.removeMux(mc)
+		_ = mc.Close()
 		return
 	}
 	log.Printf("Registered reverse route: remote=%s priority=%d accept=%d reject=%d", mc.RemoteName(), route.priority, len(update.Accept), len(update.Reject))

@@ -57,7 +57,8 @@ type MuxConn struct {
 	lastPacketUnixNano atomic.Int64 // زمان آخرین بسته دریافتی یا ارسالی
 	closed             bool
 	closeMu            sync.RWMutex
-	writeMu            sync.Mutex                // قفل نوشتن برای اتمیک نگه‌داشتن عملیات نوشتن
+	writeQueue         chan muxWriteRequest      // dedicated writer queue; callers never perform raw socket writes inline
+	writerStop         chan struct{}             // closed with the mux to stop queued writes
 	onPacket           func(*Packet)             // callback دریافت بسته
 	onKeepAlive        func(time.Duration, bool) // callback invoked when a valid keep-alive packet is received
 	onWriteError       func(error, bool)         // callback invoked when a raw socket write fails; bool reports timeout
@@ -115,7 +116,8 @@ type MuxConn struct {
 	macKey      []byte                         // کلید HMAC بسته mux، مشتق‌شده از گذرواژه کاربر
 	userName    string                         // کاربری که سرور تطبیق داده است
 	authMu      sync.RWMutex                   // محافظت از macKey/userName
-	obfPool     atomic.Pointer[obfheader.Pool] // pool header مبهم‌سازی برای هر اتصال
+	sendObfPool atomic.Pointer[obfheader.Pool] // writer-owned outbound obfuscation pool
+	recvObfPool atomic.Pointer[obfheader.Pool] // read-loop inbound obfuscation pool
 	hsInfo      obfheader.HandshakeInfo        // parsed first-header information on the server
 
 	receiveWindowBudget *ReceiveWindowBudget // optional server-process-wide adaptive receive-window budget
@@ -152,6 +154,8 @@ func NewMuxConnWithHandshake(conn *crypto.CryptoConn, isServer bool, headerKey, 
 		maxActiveCount: constants.MaxConcurrentChannels,
 		createdAt:      now,
 		keepAliveStop:  make(chan struct{}),
+		writeQueue:     make(chan muxWriteRequest, muxWriteQueueSize),
+		writerStop:     make(chan struct{}),
 		invalidTimeout: invalidTimeoutFromKey(headerKey),
 		isServer:       isServer,
 		remoteAddr:     remoteAddr,
@@ -173,8 +177,12 @@ func NewMuxConnWithHandshake(conn *crypto.CryptoConn, isServer bool, headerKey, 
 	// کلاینت بلافاصله pool مبهم‌سازی را تولید می‌کند
 	if !isServer {
 		mc.obfV = obfV
-		mc.obfPool.Store(obfheader.GeneratePoolWithKey(obfV, headerType, string(headerKey)))
+		pool := obfheader.GeneratePoolWithKey(obfV, headerType, string(headerKey))
+		mc.sendObfPool.Store(pool)
+		mc.recvObfPool.Store(pool)
 	}
+
+	go mc.writeLoop()
 
 	if isServer {
 		mc.startInvalidDeadlineTimer()
